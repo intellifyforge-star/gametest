@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Pixel Fighting Game</title>
+<style>
+body { margin:0; overflow:hidden; background:black; }
+canvas { display:block; }
+#hpBar{ position:absolute; top:10px; left:10px; width:200px; height:20px; border:2px solid white; }
+#hpBarInner{ width:100%; height:100%; background:green; }
+#loading{ position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); color:white; font-family:sans-serif; font-size:24px; }
+</style>
+</head>
+<body>
+<div id="loading">Loading...</div>
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+<div id="hpBar"><div id="hpBarInner"></div></div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const loadingDiv = document.getElementById('loading');
+
+// Assets
+const bgImg = new Image(); bgImg.src="https://raw.githubusercontent.com/intellifyforge-star/gametest/refs/heads/main/grass_14.png";
+const playerImgs = {stationary:new Image(), run1:new Image(), run2:new Image(), fire:new Image()};
+playerImgs.stationary.src="https://raw.githubusercontent.com/intellifyforge-star/gametest/refs/heads/main/stationary.png";
+playerImgs.run1.src="https://raw.githubusercontent.com/intellifyforge-star/gametest/refs/heads/main/Runstart.png";
+playerImgs.run2.src="https://raw.githubusercontent.com/intellifyforge-star/gametest/refs/heads/main/run2.png";
+playerImgs.fire.src="https://raw.githubusercontent.com/intellifyforge-star/gametest/refs/heads/main/fire.png";
+
+const opponentImg = new Image(); opponentImg.src="https://raw.githubusercontent.com/intellifyforge-star/gametest/refs/heads/main/character.png";
+const tankImg = new Image(); tankImg.src="https://raw.githubusercontent.com/intellifyforge-star/gametest/refs/heads/main/tank.png";
+const bulletImg = new Image(); bulletImg.src="https://raw.githubusercontent.com/intellifyforge-star/gametest/refs/heads/main/bullet.png";
+const missileImg = new Image(); missileImg.src="https://raw.githubusercontent.com/intellifyforge-star/gametest/refs/heads/main/misile.png";
+const blastImg = new Image(); blastImg.src="https://raw.githubusercontent.com/intellifyforge-star/gametest/refs/heads/main/blast.png";
+
+// Sounds
+const shootSound = new Audio("https://www.soundjay.com/button/beep-07.wav");
+const blastSound = new Audio("https://www.soundjay.com/button/beep-10.wav");
+
+// Player
+const player = {x:100, y:400, width:64, height:64, speed:5, hp:30, currentFrame:0, frameCounter:0, shooting:false, hitsDone:{}};
+
+// Opponents
+let opponents = [], opponentIndex=0, maxOpponents=10;
+let tank = null;
+
+// Bullets & Blasts
+let bullets = [], blasts = [];
+
+// Keyboard & Mouse
+const keys = {};
+let mouseX=0, mouseY=0;
+document.addEventListener("keydown", e => keys[e.key]=true);
+document.addEventListener("keyup", e => keys[e.key]=false);
+canvas.addEventListener("mousedown", e => playerShoot());
+canvas.addEventListener("mousemove", e=>{
+  const rect=canvas.getBoundingClientRect();
+  mouseX=e.clientX-rect.left;
+  mouseY=e.clientY-rect.top;
+});
+
+// Spawn opponent from right smoothly
+function spawnOpponent(){
+  if(opponentIndex>=maxOpponents || tank) return;
+  const power = 1 + Math.floor(opponentIndex/2);
+  const op = {id:opponentIndex, x:canvas.width, targetX:canvas.width-150, y:400, width:64, height:64, hp:5, speed:1.2, power:power, shootingCooldown:0};
+  opponents.push(op);
+  opponentIndex++;
+  if(opponentIndex===3){ // After 3rd opponent spawn tank
+    tank = {x:canvas.width, targetX:canvas.width-200, y:200, width:128, height:128, hp:20, speed:0.5, shootingCooldown:120};
+  }
+}
+
+// Shooting
+function playerShoot(){
+  const dx = mouseX - (player.x + player.width/2);
+  const dy = mouseY - (player.y + player.height/2);
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  bullets.push({x:player.x + player.width/2, y:player.y + player.height/2, dx:7*dx/dist, dy:7*dy/dist, owner:'player', type:'normal'});
+  shootSound.currentTime=0; shootSound.play();
+  player.shooting=true;
+}
+
+function tankShoot(){
+  if(!tank) return;
+  const dx = player.x + player.width/2 - (tank.x + tank.width/2);
+  const dy = player.y + player.height/2 - (tank.y + tank.height/2);
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  bullets.push({x:tank.x + tank.width/2, y:tank.y + tank.height/2, dx:3*dx/dist, dy:3*dy/dist, owner:'tank', type:'missile'});
+  tank.shootingCooldown=120;
+}
+
+// Create blast
+function createBlast(x,y){ blasts.push({x,y,frame:0}); blastSound.currentTime=0; blastSound.play(); }
+
+// Update
+function update(){
+  // Player movement
+  let moving=false;
+  if(keys['ArrowLeft']){ player.x-=player.speed; moving=true; }
+  if(keys['ArrowRight']){ player.x+=player.speed; moving=true; }
+  if(keys['ArrowUp']){ player.y-=player.speed; moving=true; }
+  if(keys['ArrowDown']){ player.y+=player.speed; moving=true; }
+  player.x = Math.max(0, Math.min(player.x, canvas.width/2 - player.width));
+  player.y = Math.max(0, Math.min(player.y, canvas.height-player.height));
+
+  // Alternate running frames
+  player.frameCounter++;
+  if(player.frameCounter>10){ player.currentFrame=(player.currentFrame+1)%2; player.frameCounter=0; }
+
+  // Update opponents
+  opponents.forEach(op=>{
+    // Smooth move from right to targetX
+    if(op.x>op.targetX) op.x -= op.speed;
+    else{
+      // Follow player within right half
+      if(op.x>canvas.width/2) op.x-=op.speed; 
+      if(op.y>player.y) op.y-=op.speed; else op.y+=op.speed;
+      op.shootingCooldown--;
+      if(op.shootingCooldown<=0){
+        const dx = player.x - op.x, dy = player.y - op.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        bullets.push({x:op.x, y:op.y+op.height/2-8, dx:4*dx/dist, dy:4*dy/dist, owner:'opponent', type:'normal'});
+        op.shootingCooldown=60;
+      }
+      op.x = Math.max(canvas.width/2, Math.min(op.x, canvas.width - op.width));
+      op.y = Math.max(0, Math.min(op.y, canvas.height-op.height));
+    }
+  });
+
+  // Tank behavior
+  if(tank){
+    if(tank.x>tank.targetX) tank.x -= tank.speed;
+    else if(tank.shootingCooldown<=0) tankShoot();
+    tank.shootingCooldown--;
+  }
+
+  // Update bullets
+  bullets.forEach((b,i)=>{
+    b.x+=b.dx; b.y+=b.dy;
+    if(b.x<0||b.x>canvas.width||b.y<0||b.y>canvas.height){ createBlast(b.x,b.y); bullets.splice(i,1); return; }
+
+    // Player hit
+    if(b.owner!=='player' && b.x<player.x+player.width && b.x+16>player.x && b.y<player.y+player.height && b.y+16>player.y){
+      createBlast(b.x,b.y);
+      bullets.splice(i,1);
+      if(b.owner==='tank') player.hp-=5;
+      else player.hp-=1;
+      updateHpBar();
+    }
+
+    // Opponent hit
+    opponents.forEach((op,j)=>{
+      if(b.owner==='player' && b.x<op.x+op.width && b.x+16>op.x && b.y<op.y+op.height && b.y+16>op.y){
+        createBlast(b.x,b.y);
+        bullets.splice(i,1);
+        if(!player.hitsDone[op.id]) player.hitsDone[op.id]=0;
+        player.hitsDone[op.id]++;
+        if(player.hitsDone[op.id]>=5) opponents.splice(j,1); // 5 hits to destroy
+      }
+    });
+
+    // Tank hit
+    if(tank && b.owner==='player' && b.x<tank.x+tank.width && b.x+16>tank.x && b.y<tank.y+tank.height && b.y+16>tank.y){
+      createBlast(b.x,b.y);
+      bullets.splice(i,1);
+      tank.hp--;
+      if(tank.hp<=0){ tank=null; alert("You Won!"); }
+    }
+  });
+}
+
+// Draw
+function drawBackground(){ const patternSize=64; for(let x=0;x<canvas.width;x+=patternSize)for(let y=0;y<canvas.height;y+=patternSize)ctx.drawImage(bgImg,x,y,patternSize,patternSize);}
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawBackground();
+
+  // Middle line
+  ctx.strokeStyle='white'; ctx.setLineDash([5,5]);
+  ctx.beginPath(); ctx.moveTo(canvas.width/2,0); ctx.lineTo(canvas.width/2,canvas.height); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Aim dotted line
+  ctx.strokeStyle='yellow'; ctx.setLineDash([5,5]);
+  ctx.beginPath();
+  ctx.moveTo(player.x + player.width/2, player.y + player.height/2);
+  ctx.lineTo(mouseX, mouseY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Opponents rotated 180°
+  opponents.forEach(op=>{
+    ctx.save();
+    ctx.translate(op.x + op.width/2, op.y + op.height/2);
+    ctx.rotate(Math.PI);
+    ctx.drawImage(opponentImg, -op.width/2, -op.height/2, op.width, op.height);
+    ctx.restore();
+  });
+
+  // Tank
+  if(tank){
+    ctx.save();
+    ctx.translate(tank.x + tank.width/2, tank.y + tank.height/2);
+    ctx.rotate(Math.PI); // face left
+    ctx.drawImage(tankImg, -tank.width/2, -tank.height/2, tank.width, tank.height);
+    ctx.restore();
+  }
+
+  // Bullets
+  bullets.forEach(b=>{
+    if(b.type==='missile') ctx.drawImage(missileImg,b.x,b.y,32,32);
+    else ctx.drawImage(bulletImg,b.x,b.y,16,16);
+  });
+
+  // Blasts (enlarged)
+  blasts.forEach((bl,i)=>{
+    ctx.drawImage(blastImg,bl.x-32,bl.y-32,64,64);
+    bl.frame++;
+    if(bl.frame>10) blasts.splice(i,1);
+  });
+
+  // Player rotated 90° right
+  let playerImgToDraw = playerImgs.stationary;
+  if(player.shooting) playerImgToDraw = playerImgs.fire;
+  else if(keys['ArrowLeft']||keys['ArrowRight']||keys['ArrowUp']||keys['ArrowDown']) playerImgToDraw = player.currentFrame===0?playerImgs.run1:playerImgs.run2;
+  ctx.save();
+  ctx.translate(player.x + player.width/2, player.y + player.height/2);
+  ctx.rotate(Math.PI/2);
+  ctx.drawImage(playerImgToDraw, -player.width/2, -player.height/2, player.width, player.height);
+  ctx.restore();
+
+  player.shooting=false;
+}
+
+function updateHpBar(){ 
+  const hpInner=document.getElementById('hpBarInner'); 
+  hpInner.style.width=(player.hp/30*100)+'%'; 
+  if(player.hp<=0) alert("Game Over!");
+}
+
+function gameLoop(){ update(); draw(); requestAnimationFrame(gameLoop); }
+
+// Load assets
+let imagesLoaded=0, totalImages=10;
+function imageLoaded(){ imagesLoaded++; if(imagesLoaded>=totalImages){ loadingDiv.style.display='none'; spawnOpponent(); gameLoop(); } }
+[bgImg,playerImgs.stationary,playerImgs.run1,playerImgs.run2,playerImgs.fire,opponentImg,tankImg,bulletImg,missileImg,blastImg].forEach(img=>img.onload=imageLoaded);
+
+// Spawn opponents periodically
+setInterval(spawnOpponent,10000);
+</script>
+</body>
+</html>
